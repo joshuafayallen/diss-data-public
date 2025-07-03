@@ -1,0 +1,199 @@
+---
+title: "Scraping the Camp Website"
+format: html
+---
+
+
+So to get the name of the camps and communes that they were located in you needed to do a few things. The first thing was to scrape the actual websites to get the name of the camps. Which turned out to be sort of useful. So you went ahead and made sure it was not against the TOS. Which It was not. So you went ahead and got the name of the camps and then you got the links to the camps as. 
+
+Essentially what was weird about the website was that each bullet point was stored as individual tables. 
+
+```{r}
+#| eval: false
+pacman::p_load("rvest", "robotstxt", "tidyverse")
+# okay it is not against the sites terms of service! 
+get_robotstxt("http://www.ajpn.org/touslieuinternements-0.html")
+
+camp_scraper = function(number, table_position = 4) {
+  link <-  paste0(base_link, number, ".html")
+  
+  cat("Scraping url:", link, "\n")
+  
+names_df = read_html(link) |> 
+  html_elements("table") |> 
+  html_table(header = FALSE) |> 
+  pluck(table_position) 
+
+return(names_df)
+
+Sys.sleep(5)
+
+}
+
+
+camps_data = map_df(1:87, camp_scraper)
+
+
+camps_data = select(camps_data, -c(1,2)) 
+
+get_links = function(number) {
+  link <-  paste0(base_link, number, ".html")
+  
+  cat("Scraping url:", link, "\n")
+  
+  link_df =  read_html(link) |> 
+    html_elements("a") |> 
+    html_attr("href") |>
+    as_tibble() |> 
+    filter(str_detect(value, "/internement")) |> 
+    mutate(value = str_remove_all(value, "../"),
+           link = paste0("http://www.ajpn.org/", value))
+  
+  return(link_df)
+
+  Sys.sleep(sample(5:10,1))
+  
+}
+
+
+links_data = map_df(1:87, get_links)
+
+
+write_csv(camps_data, here::here("data", "camp-data-raw.csv"))
+
+write_csv(links_data, here::here("data", "links-data.csv"))
+
+```
+
+
+To get the camps and what comunes they were in what you needed to do was essentially to reconstruct the links cuz they were not actually all that great and had some problems with them. To throw some computing power at the problem you used furrr. 
+
+
+
+```{r}
+pacman::p_load("tidyverse", "rvest", "furrr", "progressr")
+
+
+
+plan(multisession, workers = 3)
+
+
+camps_data = read_csv(here::here("data", "camp-data-raw.csv"))
+
+links_data = read_csv(here::here("data", "links-data.csv"))
+
+
+remove_pat = c("internement-", "-[[:digit:]]+",".html")
+
+links_data_cleaner = links_data |> 
+  mutate(camps_name = str_remove_all(value,
+                                     paste(remove_pat,
+                                           collapse = "|")),
+         camps_name = gsub("\\-", " ", camps_name),
+         id = row_number())
+
+
+fix_some_links = links_data_cleaner |> 
+  filter(str_detect(value, "htt/")) |> 
+  mutate(value = str_remove(value, "htt/"),
+         value = str_replace(value,".ointernement", "/internement"),
+         value = str_replace(value, "www.ajpn", ""),
+         link =  paste0("http://www.ajpn.org/", value),
+         camps_name = str_remove_all(value,
+                                     paste(remove_pat,
+                                           collapse = "|")),
+         camps_name = str_remove(camps_name, "/"),
+         camps_name = gsub("\\-", " ", camps_name))
+
+join_data = links_data_cleaner |> 
+  left_join(fix_some_links, join_by(id)) |> 
+  mutate(camp_name = coalesce(camps_name.y, camps_name.x),
+         link = coalesce(link.y, link.x),
+         id = row_number()) |> 
+  select(camp_name, link, id)
+
+
+get_links = join_data |> 
+  mutate(camp_name_fix = str_replace_all(camp_name, " ", "-"),
+         link_prefix = "http://www.ajpn.org/internement-")
+
+
+
+
+links_to_scrape = join_data |> 
+  select(link) |> 
+  deframe() 
+```
+
+So now we have clean links and a vector of URLS that need to be scraped. What you found out somewhat quickly is that you need a way to deal with bad URLS. It is not that reconstruction of links failed it was more that some of the links just straightup are dead. To do this you used `possibly` in `purrr`.
+
+
+
+```{r}
+
+
+get_camp_and_commune = function(link, patt = c("durant", "la", "Seconde", "Guerre", "mondiale", "\\(WWII\\)"),
+                                table_position = 10){
+
+ 
+  commune_data_raw = read_html(link) |> 
+    html_elements("table") |> 
+    html_table() |> 
+    pluck(table_position)
+    
+  clean_commune = commune_data_raw |> 
+    mutate(camp_name = str_remove_all(X3,
+                                      paste(patt, collapse = "|")),
+           camp_name = str_squish(camp_name),
+           clean_col_numb = str_squish(X4),
+           commune_numb = str_extract_all(clean_col_numb, "\\s*(\\d+)")) |> 
+    filter(str_detect(X3, "\\(WWII\\)")) |> 
+    select(camp_name, commune_numb)
+  Sys.sleep(sample(5:10, 1))
+  
+return(clean_commune)
+  }
+
+poss_commune = possibly(.f = get_camp_and_commune)
+
+camp_and_commune_raw = future_map(links_to_scrape,
+                              poss_commune, .progress = TRUE,
+                              furrr_options(chunk_size = 914),
+                              seed = TRUE)
+```
+
+
+Now it is time to extract the results. 
+
+
+
+```{r}
+camp_extract_results = camp_and_commune_raw |> 
+  compact() |> 
+  list_rbind() |> 
+  unnest_longer(commune_numb) |> 
+  distinct(camp_name, commune_numb, .keep_all = TRUE)
+
+
+extract_errors = map_vec(camp_and_commune_raw, is.null) |> 
+  as.data.frame() |> 
+  rename(did_error = `map_vec(camp_and_commune_raw, is.null)` ) |>
+  mutate(id = row_number()) |> 
+  filter(did_error == TRUE) |> 
+  select(id) |> 
+  deframe()
+
+find_camps_that_errored = join_data |> 
+  filter(id %in% extract_errors)
+
+write_csv(find_camps_that_errored, here::here("data", "camps-no-info.csv"))
+
+
+
+write_csv(camp_extract_results, here::here("data", "camps-commune-raw.csv"))
+
+```
+
+
+
+

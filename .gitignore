@@ -16,3 +16,4 @@ greyblueguppy/polling-station-shape-file
 greyblueguppy/shp-files
 *.geojson 
 greyblueguppy/squicciarini
+*.dta

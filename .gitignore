@@ -10,3 +10,9 @@ wheels/
 .venv
 .DS_Store
 .Rproj
+*.parquet
+*.csv
+greyblueguppy/polling-station-shape-file
+greyblueguppy/shp-files
+*.geojson 
+greyblueguppy/squicciarini

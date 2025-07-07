@@ -251,6 +251,14 @@ class Scraper:
         dicts = [self._params_to_dict(params) for params in clean_text]
 
         return pl.DataFrame(dicts)
+    
+    def _clean_windows(self):
+        
+        """Close extra windows and return to main window"""
+        while len(self.driver.window_handles) > 1:
+            self.driver.switch_to.window(self.driver.window_handles[-1])
+            self.driver.close()
+        self.driver.switch_to.window(self.driver.window_handles[0])
 
     def scrape_letter(
         self,
@@ -267,46 +275,38 @@ class Scraper:
         if letter is None:
             raise ValueError("letter is None; please provide a letter to scrape")
 
-        use_existing_driver = driver is not None or hasattr(self, 'driver')
-        
-        if driver is not None:
-            current_driver = driver
-        elif hasattr(self, 'driver') and self.driver:
-            current_driver = self.driver
-        else:
-            current_driver = self._make_driver()
-
         try:
-            current_driver.get(self.url)
+            self._clean_windows()
+            self.driver.get(self.url)
 
-            # Fill out the search form - use current_driver instead of driver
-            surname_input = WebDriverWait(current_driver, 30).until(
+            # Fill out the search form - use self.driver instead of driver
+            surname_input = WebDriverWait(self.driver, 30).until(
                 EC.presence_of_element_located((
                     By.CSS_SELECTOR,
                     'body > form > div.content > table:nth-child(8) > tbody > tr > td:nth-child(3) > input'
                 ))
             )
-            surname_kind_select = current_driver.find_element(
+            surname_kind_select = self.driver.find_element(
                 By.CSS_SELECTOR,
                 'body > form > div.content > table:nth-child(8) > tbody > tr > td:nth-child(2) > select'
             )
             surname_input.send_keys(letter)
             Select(surname_kind_select).select_by_visible_text('starts with')
 
-            submit_button = current_driver.find_element(By.XPATH, '/html/body/form/div[2]/input[35]')
+            submit_button = self.driver.find_element(By.XPATH, '/html/body/form/div[2]/input[35]')
             submit_button.click()
 
             # Switch to new window/tab
-            WebDriverWait(current_driver, 30).until(lambda d: len(d.window_handles) > 1)
-            current_driver.switch_to.window(current_driver.window_handles[1])
+            WebDriverWait(self.driver, 30).until(lambda d: len(d.window_handles) > 1)
+            self.driver.switch_to.window(self.driver.window_handles[1])
 
-            WebDriverWait(current_driver, 90).until(
+            WebDriverWait(self.driver, 90).until(
                 EC.presence_of_element_located((By.XPATH, '/html/body/center/table'))
             )
 
             # Store current driver for _process_webpage method
             original_driver = getattr(self, 'driver', None)
-            self.driver = current_driver
+            self.driver = self.driver
 
             # First page data
             letter_dat = self._process_webpage()
@@ -314,12 +314,12 @@ class Scraper:
             # Loop through pagination
             while True:
                 try:
-                    next_button = WebDriverWait(current_driver, 90).until(
+                    next_button = WebDriverWait(self.driver, 90).until(
                         EC.element_to_be_clickable((By.LINK_TEXT, 'Next 50 entries'))
                     )
                     next_button.click()
 
-                    WebDriverWait(current_driver, 90).until(
+                    WebDriverWait(self.driver, 90).until(
                         EC.presence_of_element_located((By.XPATH, '/html/body/center/table'))
                     )
                     current_dat = self._process_webpage()
@@ -331,21 +331,12 @@ class Scraper:
                     break
 
             print(f"Collected {letter_dat.height} rows for: {letter}")
-            
-            if original_driver:
-                self.driver = original_driver
-            
             return letter_dat
 
         except Exception as e:
             tb = traceback.format_exc()
             print(f"Error scraping {letter}:\n{tb}")
             return pl.DataFrame()
-
-        finally:
-            if not use_existing_driver:
-                current_driver.quit()
-
     def scrape_all(self):
         """Scrape all letters using the instance's driver"""
         for letter in self.lets_sub:

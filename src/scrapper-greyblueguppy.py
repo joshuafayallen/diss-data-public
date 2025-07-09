@@ -7,7 +7,7 @@ import string
 
 # this is a little bit more robust since the MDJF is not the most well constructed website 
 # so if you just submit a eventually it will go blank once it has a combo of letters that it doesn't have
-# For example FM has no entries so the webpage will go blank and then the scrapper will think its done with the letter A 
+# For example FM has no entries so the webpage will go blank and then the scrapper will think its done with the letter F 
 lets1 = pl.DataFrame({'first_let': list(string.ascii_uppercase)})
 lets2  = pl.DataFrame({'second_let': list(string.ascii_uppercase)})
 
@@ -20,3 +20,6 @@ sc = Scraper(headless=True,
 
 
 mdjf = sc.scrape_all()
+
+
+mdjf.write_parquet('data/mdjf-rescraped.parquet')
